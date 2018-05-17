@@ -217,7 +217,6 @@ object SparkGA1
 
 		val file = new File(FileManager.getToolsDirPath(config) + "STAR")
 		file.setExecutable(true)
-		val res = ArrayBuffer.empty[((Integer, Integer), (String, Long, Int, Int, String))]
 
 		if (config.doStreamingBWA)
 		{
@@ -229,8 +228,7 @@ object SparkGA1
 					if (!FileManager.exists(config.getInputFolder + "ulStatus/" + chunkNum, config))
 					{
 						LogWriter.dbgLog("star/" + x, "#\tchunkNum = " + chunkNum + ", end.txt exists but this file doesn't!", config)
-						res.append(((-1, -1), ("", 0, 0, 0, "")))
-						return -10
+						return -10000
 					}
 				}
 				Thread.sleep(1000)
@@ -1520,63 +1518,12 @@ object SparkGA1
 		});
 		//////////////////////////////////////////////////////////////////////////
 		if (part == 1)
-		{
+		{		
+			val noTask = config.getNumTasks.toInt
+			var noPartition = noTask
+			var inputData = sc.parallelize(Array("spark", "genome")) //randomly define an RDD of type String
 
-
-			var bwaOutStr = new StringBuilder
-			if (config.doStreamingBWA)
-			{
-				var done = false
-				val parTasks = config.getChunkerGroupSize.toInt
-				var si = 0
-				var ei = parTasks
-				while(!done)
-				{
-					var indexes = (si until ei).toArray  
-					val inputData = sc.parallelize(indexes, indexes.size)
-					val bwaOutput = inputData.flatMap(x => bwaRun(x + ".fq", bcConfig.value)).cache
-					for(e <- bwaOutput.collect)
-					{
-						val chr = e._1._1
-						if (chr == -1)
-							done = true
-						else
-						{
-							val reg = e._1._2
-							val fname = e._2._1
-							val reads = e._2._2
-							val minPos = e._2._3
-							val maxPos = e._2._4
-							val posFname = e._2._5
-						
-							bwaOutStr.append(chr + "\t" + reg + "\t" + fname + "\t" + reads + "\t" + minPos + "\t" + maxPos + "\t" + posFname + "\n")
-						}
-					}
-					si += parTasks
-					ei += parTasks
-				}
-			}
-		    else
-			{
-				val inputArray = FileManager.getInputFileNames(config.getInputFolder, config).filter(x => x.contains(".fq")).map(x => x.replace(".gz", ""))  
-				if (inputArray == null)
-				{
-					println("The input directory does not exist!")
-					System.exit(1)
-				}
-				scala.util.Sorting.quickSort(inputArray)
-				inputArray.foreach(println)
-			
-				// Give chunks to bwa instances
-			
-				// Run instances of bwa and get the output as Key Value pairs
-				// <(chr, reg), fname>
-
-				
-				val noTask = config.getNumTasks.toInt
-				var noPartition = noTask
-
-                if(config.getMode!="local"){
+            if(config.getMode!="local"){
 					val noInstance = config.getNumInstance.toInt
 					noPartition = noTask*noInstance
 				    var noExecutor = sc.getExecutorMemoryStatus.size - 1
@@ -1588,11 +1535,73 @@ object SparkGA1
 				    }
 				    noExecutor = sc.getExecutorMemoryStatus.size - 1
 				    LogWriter.statusLog("after waiting: ", "NO of executors:"+noExecutor, config)
-                }
+            }
 
-				val inputData = sc.parallelize(inputArray, noPartition)
+			
 
-/*				val testStarOutput = inputData.mapPartitionsWithIndex{ (index, iter) =>
+			if (config.doStreamingBWA)
+			{
+				var done = false
+				val parTasks = config.getChunkerGroupSize.toInt
+				var si = 0
+				var ei = parTasks
+				while(!done)
+				{
+					var indexes = (si until ei).toArray  
+					val inputDataS = sc.parallelize(indexes, noPartition)
+					val starOutput1 = inputDataS.mapPartitionsWithIndex{ (index, iter) =>
+				        if(iter.isEmpty){
+						    Iterator[Int]()
+					    }
+					    else{
+                            starGenomeLoad("1", "LoadAndExit", index.toString, config)
+						    iter.map(x=>starRun(x + ".fq", bcConfig.value))
+						//iter
+					    }
+				    }      
+				    if(starOutput1.collect.contains(-10000)) done=true
+		
+					si += parTasks
+					ei += parTasks
+				}
+
+				val inputArray = FileManager.getInputFileNames(config.getInputFolder, config).filter(x => x.contains(".fq")).map(x => x.replace(".gz", ""))  
+			    if (inputArray == null)
+			    {
+					println("The input directory does not exist!")
+					System.exit(1)
+				}
+				scala.util.Sorting.quickSort(inputArray)
+				inputArray.foreach(println)
+				inputData = sc.parallelize(inputArray, noPartition) //
+
+				//may optimize with smaller inputData and use map
+				val testAlign1Remove = inputData.mapPartitionsWithIndex{ (index, iter) =>
+				    if(iter.isEmpty){
+						Iterator[String]()
+					}
+					else{
+						val directory=starGenomeLoad("1", "Remove", index.toString, config)
+						var res = for (e <- iter ) yield directory
+                        res
+					}
+				}
+				testAlign1Remove.collect 
+			}
+		    else
+			{
+				val inputArray = FileManager.getInputFileNames(config.getInputFolder, config).filter(x => x.contains(".fq")).map(x => x.replace(".gz", ""))  
+				if (inputArray == null)
+				{
+					println("The input directory does not exist!")
+					System.exit(1)
+				}
+				scala.util.Sorting.quickSort(inputArray)
+				inputArray.foreach(println)
+				inputData = sc.parallelize(inputArray, noPartition) //
+				
+
+				val testStarOutput = inputData.mapPartitionsWithIndex{ (index, iter) =>
 				    if(iter.isEmpty){
 						Iterator[String]()
 					}
@@ -1616,6 +1625,7 @@ object SparkGA1
 					}
 				}
 				testAlign1Remove.collect 
+			}//end of no streaming
 
                 val pass1SJArray = inputData.flatMap(x => getPass1SJ(x,config)).reduceByKey((a, b)=>a).sortByKey().map(_._2 + '\n').collect
 
@@ -1630,7 +1640,7 @@ object SparkGA1
 				writer.close
 
 				val singleTask = sc.parallelize(1 to 1,1)
-				val regeneration = singleTask.map(x=>regenerateGenome(x,config)).collect */
+				val regeneration = singleTask.map(x=>regenerateGenome(x,config)).collect 
 
 				val testStarAlign2 = inputData.mapPartitionsWithIndex{ (index, iter) =>
 				    if(iter.isEmpty){
@@ -1689,7 +1699,7 @@ object SparkGA1
 			    FileManager.writeWholeFile(config.getOutputFolder + "starOut.txt", starOutStr.toString, config)
 				
 
-			}
+			
 		}
 		else if (part == 2)
 		{

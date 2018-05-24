@@ -58,7 +58,7 @@ import htsjdk.samtools._
 object SparkGA1
 {
 	final val saveAllStages = false
-	final val downloadSAMFileInLB = true
+	final val downloadSAMFileInLB = false //Saiyi: original  true
 	final val writeToHDFSDirectlyInLB = true
 	// Scheduling
 	final val sizeBasedLBScheduling = true
@@ -1170,15 +1170,24 @@ object SparkGA1
 			LogWriter.dbgLog("vcf/region_" + chrRegion, "*\tDownloading VCF ref files", config)
 			FileManager.downloadVCFRefFiles("vcf/region_" + chrRegion, config)
 		}
+		
+		
 		var cmdRes = picardPreprocess(tmpFileBase, config)
+		
+		
 		if (downloadRef && (config.getMode != "local"))
 		{
 			LogWriter.dbgLog("vcf/region_" + chrRegion, "*\tDownloading VCF index files", config)
 			FileManager.downloadVCFIndexFiles("vcf/region_" + chrRegion, config)
 		}
+		
+		cmdRes += splitNCigarReads(tmpFileBase, chrRegion, config)
+		
 		if (config.doIndelRealignment)
 			cmdRes += indelRealignment(tmpFileBase, chrRegion, config)
+		
 		cmdRes += baseQualityScoreRecalibration(tmpFileBase, chrRegion, config)
+		
 		cmdRes += DnaVariantCalling(tmpFileBase, chrRegion, config)
 		
 		if (config.getMode() != "local")
@@ -1220,10 +1229,30 @@ object SparkGA1
 			FileManager.uploadFileToOutput(bamOut, "picardOutput", false, config)
 		
 		// Delete temporary files
+
+		/* test saiyi
 		new File(tmpOut1).delete()
 		new File(tmpOut2).delete()
-		new File(tmpMetrics).delete()
+		new File(tmpMetrics).delete()*/
 		
+		return cmdRes
+	}
+
+	def splitNCigarReads(tmpFileBase: String, chrRegion: String, config: Configuration) : Integer = {
+        val toolsFolder = FileManager.getToolsDirPath(config)
+		val preprocess = tmpFileBase + ".bam" //input
+		val tmpOutput = tmpFileBase + "-s.bam"
+		val MemString = config.getExecMemX()
+
+		var cmdStr = "java " + MemString + " " + config.getGATKopts + " -jar " + toolsFolder + "GenomeAnalysisTK.jar -T SplitNCigarReads" + " -R " + 
+		    FileManager.getRefFilePath(config) + " -I " + preprocess + " -o " + tmpOutput + " -rf ReassignOneMappingQuality -RMQT 60 " + "-U ALLOW_N_CIGAR_READS"
+		var cmdRes = cmdStr.!
+
+		// Hamid - Save output of indelRealignment
+		if (saveAllStages)
+			FileManager.uploadFileToOutput(tmpOutput, "splitNCigarReads", false, config)
+		//any tmp files?
+
 		return cmdRes
 	}
 
@@ -1232,7 +1261,7 @@ object SparkGA1
 		val toolsFolder = FileManager.getToolsDirPath(config)
 		val knownIndel = FileManager.getIndelFilePath(config)
 		val tmpFile1 = tmpFileBase + "-2.bam"
-		val preprocess = tmpFileBase + ".bam"
+		val sInput = tmpFileBase + "-s.bam"
 		val targets = tmpFileBase + ".intervals"
 		val MemString = config.getExecMemX()
 		val regionStr = " -L " + tmpFileBase + ".bed"
@@ -1240,13 +1269,13 @@ object SparkGA1
 		
 		// Realigner target creator
 		var cmdStr = "java " + MemString + " " + config.getGATKopts + " -jar " + toolsFolder + "GenomeAnalysisTK.jar -T RealignerTargetCreator -nt " + 
-			config.getNumThreads() + " -R " + FileManager.getRefFilePath(config) + " -I " + preprocess + indelStr + " -o " + targets + regionStr
+			config.getNumThreads() + " -R " + FileManager.getRefFilePath(config) + " -I " + sInput + indelStr + " -o " + targets + regionStr
 		LogWriter.dbgLog("vcf/region_" + chrRegion, "4\t" + cmdStr, config)
 		var cmdRes = cmdStr.!
 		
 		// Indel realigner
 		cmdStr = "java " + MemString + " " + config.getGATKopts + " -jar " + toolsFolder + "GenomeAnalysisTK.jar -T IndelRealigner -R " + 
-			FileManager.getRefFilePath(config) + " -I " + preprocess + " -targetIntervals " + targets + indelStr + " -o " + tmpFile1 + regionStr
+			FileManager.getRefFilePath(config) + " -I " + sInput + " -targetIntervals " + targets + indelStr + " -o " + tmpFile1 + regionStr
 		LogWriter.dbgLog("vcf/region_" + chrRegion, "5\t" + cmdStr, config)
 		cmdRes += cmdStr.!
 		
@@ -1255,9 +1284,10 @@ object SparkGA1
 			FileManager.uploadFileToOutput(tmpFile1, "indelOutput", false, config)
 		
 		// Delete temporary files
-		new File(preprocess).delete()
-		new File(preprocess.replace(".bam", ".bai")).delete()
-		new File(targets).delete()
+		/*test saiyi
+		new File(sInput).delete()
+		new File(sInput.replace(".bam", ".bai")).delete()
+		new File(targets).delete()*/
 		
 		return cmdRes
 	}
@@ -1267,7 +1297,7 @@ object SparkGA1
 		val toolsFolder = FileManager.getToolsDirPath(config)
 		val knownIndel = FileManager.getIndelFilePath(config)
 		val knownSite = FileManager.getSnpFilePath(config)
-		val tmpFile1 = if (config.doIndelRealignment) (tmpFileBase + "-2.bam") else (tmpFileBase + ".bam")
+		val tmpFile1 = if (config.doIndelRealignment) (tmpFileBase + "-2.bam") else (tmpFileBase + "-s.bam")
 		val tmpFile2 = tmpFileBase + "-3.bam"
 		val table = tmpFileBase + ".table"
 		val MemString = config.getExecMemX()
@@ -1292,9 +1322,10 @@ object SparkGA1
 				FileManager.uploadFileToOutput(tmpFile2, "baseOutput", false, config)
 		
 			// Delete temporary files
+			/*saiyi test
 			new File(tmpFile1).delete()
 			new File(tmpFile1.replace(".bam", ".bai")).delete()
-			new File(table).delete()
+			new File(table).delete()*/
 		}
 		
 		return cmdRes
@@ -1303,11 +1334,12 @@ object SparkGA1
 	def DnaVariantCalling(tmpFileBase: String, chrRegion: String, config: Configuration) : Integer =
 	{
 		val toolsFolder = FileManager.getToolsDirPath(config)
-		val tmpFile2 = if (config.doPrintReads) (tmpFileBase + "-3.bam") else if (config.doIndelRealignment) (tmpFileBase + "-2.bam") else (tmpFileBase + ".bam")
+		val tmpFile2 = if (config.doPrintReads) (tmpFileBase + "-3.bam") else if (config.doIndelRealignment) (tmpFileBase + "-2.bam") else (tmpFileBase + "-s.bam")
 		val snps = tmpFileBase + ".vcf"
 		val bqsrStr = if (config.doPrintReads) "" else (" -BQSR " + tmpFileBase + ".table ")
 		val MemString = config.getExecMemX()
 		val regionStr = " -L " + tmpFileBase + ".bed"
+		val rnaStr = " -dontUseSoftClippedBases -stand_call_conf 20.0 "
 		// Hamid
 		val standconf = if (config.getSCC == "0") " " else (" -stand_call_conf " + config.getSCC)
 		val standemit = if (config.getSEC == "0") " " else (" -stand_emit_conf " + config.getSEC)
@@ -1315,16 +1347,17 @@ object SparkGA1
 		// Haplotype caller
 		var cmdStr = "java " + MemString + " " + config.getGATKopts + " -jar " + toolsFolder + "GenomeAnalysisTK.jar -T HaplotypeCaller -nct " + 
 			config.getNumThreads() + " -R " + FileManager.getRefFilePath(config) + " -I " + tmpFile2 + bqsrStr + " --genotyping_mode DISCOVERY -o " + snps + 
-			standconf + standemit + regionStr + " --no_cmdline_in_header --disable_auto_index_creation_and_locking_when_reading_rods"
+			standconf + standemit + regionStr + " --no_cmdline_in_header --disable_auto_index_creation_and_locking_when_reading_rods" + rnaStr
 		LogWriter.dbgLog("vcf/region_" + chrRegion, "8\t" + cmdStr, config)
 		var cmdRes = cmdStr.!
 		
 		// Delete temporary files
+		/* test saiyi
 		new File(tmpFile2).delete()
 		new File(tmpFile2.replace(".bam", ".bai")).delete()
 		new File(tmpFileBase + ".bed").delete()
 		if (!config.doPrintReads)
-			new File(tmpFileBase + ".table").delete
+			new File(tmpFileBase + ".table").delete*/
 		
 		return cmdRes
 	}
@@ -1796,7 +1829,7 @@ object SparkGA1
 				}
 				else
 				{
-					val inputFileNamesWithSize = inputFileNames.map(x => (x, hdfsManager.getFileSize(config.getOutputFolder + "bam/" + x + "-p1.bam")))
+					val inputFileNamesWithSize = inputFileNames.map(x => (x, FileManager.getBAMFileSize(config.getOutputFolder + "bam/" + x + "-p1.bam", config)))
 					val fileNamesBySize = inputFileNamesWithSize.sortWith(_._2 > _._2).map(_._1)
 					fileNamesBySize.foreach(println)
 					sc.parallelize(fileNamesBySize, fileNamesBySize.size)
@@ -1821,6 +1854,7 @@ object SparkGA1
 					"=======================================================\nFailed tasks:\n" + failedSb.toString + 
 					"=======================================================", config)
 			}
+			
 			val vcf = vcRes.flatMap(x=> getVCF(x._1, bcConfig.value))
 			vcf.setName("rdd_vcf")
 			try

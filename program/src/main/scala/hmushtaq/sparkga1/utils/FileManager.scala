@@ -47,6 +47,16 @@ object FileManager
 		}
         return lock
 	}
+	def getBAMFileSize(filePath: String , config: Configuration) :Long ={
+		val hdfsManager = new HDFSManager
+
+		if(config.getMode != "local")
+		    return hdfsManager.getFileSize(filePath)
+		else {
+			val file = new File(filePath)
+			return file.length
+		}
+	}
 
 	def getInputFileNames(dir: String, config: Configuration) : Array[String] = 
 	{

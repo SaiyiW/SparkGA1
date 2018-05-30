@@ -65,6 +65,7 @@ public class Configuration implements Serializable
 	private String vcMemGB;
 	private String chunkerConfigFilePath;
 	private String chunkerGroupSize;
+	private boolean paired;
 	private boolean streamingBWA;
 	private boolean performIndelRealignment;
 	private boolean performPrintReads;
@@ -85,7 +86,12 @@ public class Configuration implements Serializable
 			DocumentBuilderFactory documentBuilderFactory = DocumentBuilderFactory.newInstance();
 			DocumentBuilder documentBuilder = documentBuilderFactory.newDocumentBuilder();
 			Document document = documentBuilder.parse(file);
+
+			String pairedString = document.getElementsByTagName("paired-input").item(0).getTextContent();
+			if((pairedString!="true")||(pairedString!="false"))
+			    throw new IllegalArgumentException("Unrecognized paired-input option: it must be either \"true\" or \"false\".");
 			
+			paired = (pairedString == "true");
 			mode = document.getElementsByTagName("mode").item(0).getTextContent();
 			refPath = document.getElementsByTagName("refPath").item(0).getTextContent();
 			snpPath = document.getElementsByTagName("snpPath").item(0).getTextContent();
@@ -165,6 +171,8 @@ public class Configuration implements Serializable
 			System.exit(1);
 		}
 	}
+
+	
 	
 	private boolean trueIfTagDoesntExist(Document document, String tag)
 	{
@@ -206,6 +214,10 @@ public class Configuration implements Serializable
 			return path.substring(path.lastIndexOf('/') + 1);
 		else
 			return path;
+	}
+
+	public boolean getPaired(){
+		return paired;
 	}
 	
 	public SAMSequenceDictionary getDict()

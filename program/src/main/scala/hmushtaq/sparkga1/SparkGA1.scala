@@ -192,32 +192,41 @@ object SparkGA1
 	{
 		val blockSize = 4096 * 1024; 
 		var input_file = ""
+		var input_file2= ""
 		val tmpDir = config.getTmpFolder
 		val hdfsManager = new HDFSManager
 		val downloadRef = config.getSfFolder == "./"
+		val logName = x + ".fq.log"
+		val paired = config.getPaired()
 
 		if (config.getMode != "local")
 		{
-			hdfsManager.create(config.getOutputFolder + "log/star/" + x)
+			hdfsManager.create(config.getOutputFolder + "log/star/" + logName)
 			
 			if (!(new File(config.getTmpFolder).exists))
 				new File(config.getTmpFolder).mkdirs()
 			
 			if (downloadRef && (config.getMode != "local"))
 			{
-				LogWriter.dbgLog("star/" + x, "*\tDownloading reference if required.", config)
+				LogWriter.dbgLog("star/" + logName, "*\tDownloading reference if required.", config)
 				FileManager.downloadRNARef(config)
 			}
 		}
 		else
-		{
-			input_file = config.getInputFolder + x + ".gz"
+		{ //local mode
+			if(paired) {
+				input_file = config.getInputFolder + x + "-1.fq.gz"; 
+				input_file2 = config.getInputFolder + x + "-2.fq.gz"
+				}
+			else
+			    input_file = config.getInputFolder + x + ".fq.gz" //x is just a number
 			FileManager.makeDirIfRequired(config.getOutputFolder + "log/star", config)
 		}
 
 		val file = new File(FileManager.getToolsDirPath(config) + "STAR")
 		file.setExecutable(true)
 
+        //saiyi: haven't changed streaming to paired case
 		if (config.doStreamingBWA)
 		{
 			val chunkNum = x.split('.')(0)
@@ -237,24 +246,42 @@ object SparkGA1
 
 		if (config.getMode != "local")
 		{
-			LogWriter.dbgLog("star/" + x, "0a\tDownloading from the HDFS", config)
-			hdfsManager.download(x + ".gz", config.getInputFolder, tmpDir, false)
-			input_file = tmpDir + x + ".gz"
+			LogWriter.dbgLog("star/" + logName, "0a\tDownloading from the HDFS", config)
+			if(paired){
+				hdfsManager.download(x + "-1.fq.gz", config.getInputFolder, tmpDir, false)
+				hdfsManager.download(x + "-2.fq.gz", config.getInputFolder, tmpDir, false)
+				input_file = tmpDir + x + "-1.fq.gz"
+				input_file2= tmpDir + x + "-2.fq.gz"
+			}
+			else{
+				hdfsManager.download(x + ".fq.gz", config.getInputFolder, tmpDir, false)
+			    input_file = tmpDir + x + ".fq.gz"
+			}
+		
 		}
 
 		
 
 
 		// unzip the input .gz file
-		var fqFileName = tmpDir + x
+		var fqFileName = tmpDir + input_file.substring(input_file.lastIndexOf('/') + 1).replace(".gz", "") //e.g. tmpDir+"0-1.fq"
 		val unzipStr = "gunzip -c " + input_file
-		LogWriter.dbgLog("star/" + x, "0b\t" + unzipStr, config)
+		LogWriter.dbgLog("star/" + logName, "0b\t" + unzipStr, config)
 		unzipStr #> new java.io.File(fqFileName) !;
-		if (config.getMode != "local")
-			new File(input_file).delete()
-		
-		
-		
+
+		if(paired){
+			fqFileName = tmpDir + input_file2.substring(input_file2.lastIndexOf('/') + 1).replace(".gz", "")
+			val unzipStr = "gunzip -c " + input_file2
+		    LogWriter.dbgLog("star/" + logName, "0b\t" + unzipStr, config)
+		    unzipStr #> new java.io.File(fqFileName) !;
+			fqFileName = tmpDir + input_file.substring(input_file.lastIndexOf('/') + 1).replace(".gz", "") + " " + tmpDir + input_file2.substring(input_file2.lastIndexOf('/') + 1).replace(".gz", "")
+		}
+	
+		if (config.getMode != "local"){
+            new File(input_file).delete()
+			if(paired) new File(input_file2).delete()
+		}
+			
 		// run STAR align pass 1
 		val progName = FileManager.getToolsDirPath(config) + "STAR "
 		val outFilePrefix = tmpDir + x +"_"
@@ -264,7 +291,7 @@ object SparkGA1
 		// Example: STAR --genomeDir STAR_ref --runThreadN 8 --readFilesIn x.fq --outFileNamePrefix tmpDir/star1out/x_  (e.g. x_SJ.out.tab)
 		val command_str = progName + "--genomeDir "  + FileManager.getStarIndexLocalDire("1", config) + " --runThreadN " + nthreads.toString + 
 			" --readFilesIn " + fqFileName + " --outFileNamePrefix " + outFilePrefix + " --limitIObufferSize " + bufferSize + " --genomeLoad " + genomeLoad
-		LogWriter.dbgLog("star/" + x, "1\tstar pass 1 alignment started, RGID = " + config.getRGID + " -> " + command_str, config)
+		LogWriter.dbgLog("star/" + logName, "1\tstar pass 1 alignment started, RGID = " + config.getRGID + " -> " + command_str, config)
 		
 		var cmd_res = command_str.!
 		// Delete useless files
@@ -278,16 +305,18 @@ object SparkGA1
         val isTabExist = Files.exists(Paths.get(outFilePrefix+"SJ.out.tab"))
 		// val isGenomeThere = Files.exists(Paths.get("./STAR_ref/genomeParameters.txt"))
 		// val isBwaExist = Files.exists(Paths.get("bwa"))
-		LogWriter.dbgLog("star/" + x, "Is tab generated: " + isTabExist +" Path: " + outFilePrefix + "SJ.out.tab", config)
+		LogWriter.dbgLog("star/" + logName, "Is tab generated: " + isTabExist +" Path: " + outFilePrefix + "SJ.out.tab", config)
 		//LogWriter.dbgLog("star/" + x, "Is star genome exist: " + isGenomeThere +" command success? " + cmd_res, config)
 		if (config.getMode() != "local")
 		{
 			//local sj will be deleted
 			hdfsManager.upload(x + "_SJ.out.tab", config.getTmpFolder, config.getOutputFolder + "pass1SJ/", true)
 		}
-
-		new File(fqFileName).delete()
-
+      
+        for(e <- fqFileName.split(' '))
+		    new File(e).delete()
+		
+		
 		return cmd_res
 
 	}
@@ -295,30 +324,57 @@ object SparkGA1
 	def starRun2(x: String, config: Configuration) : (Array[((Integer, Integer), (String, Long, Int, Int, String))]) = {
 
 		var input_file = ""
+		var input_file2= ""
 		val tmpDir = config.getTmpFolder
 		val hdfsManager = new HDFSManager
 		val blockSize = 4096 * 1024; 
+		val logName = x + ".fq.log"
+		val paired = config.getPaired()
 
-		LogWriter.dbgLog("star/" + x, "0a\tStarting star pass2 alignment", config)
+		LogWriter.dbgLog("star/" + logName, "0a\tStarting star pass2 alignment", config)
 
 		if (config.getMode != "local")
 		{
-			LogWriter.dbgLog("star/" + x, "0a\tDownloading input again from the HDFS", config)
-			hdfsManager.download(x + ".gz", config.getInputFolder, tmpDir, false)
-			input_file = tmpDir + x + ".gz"
+			LogWriter.dbgLog("star/" + logName, "0a\tDownloading input again from the HDFS", config)
+			if(paired){
+				hdfsManager.download(x + "-1.fq.gz", config.getInputFolder, tmpDir, false)
+				hdfsManager.download(x + "-2.fq.gz", config.getInputFolder, tmpDir, false)
+				input_file = tmpDir + x + "-1.fq.gz"
+				input_file2= tmpDir + x + "-2.fq.gz"
+			}
+			else{
+				hdfsManager.download(x + ".fq.gz", config.getInputFolder, tmpDir, false)
+			    input_file = tmpDir + x + ".fq.gz"
+			}
 		}
 		else
 		{
-			input_file = config.getInputFolder + x + ".gz"
+			if(paired) {
+				input_file = config.getInputFolder + x + "-1.fq.gz"; 
+				input_file2 = config.getInputFolder + x + "-2.fq.gz"
+				}
+			else
+			    input_file = config.getInputFolder + x + ".fq.gz" //x is just a number
 		}
 
 		// unzip the input .gz file
-		var fqFileName = tmpDir + x
+		var fqFileName = tmpDir + input_file.substring(input_file.lastIndexOf('/') + 1).replace(".gz", "") //e.g. tmpDir+"0-1.fq"
 		val unzipStr = "gunzip -c " + input_file
-		LogWriter.dbgLog("star/" + x, "0b\t" + unzipStr, config)
+		LogWriter.dbgLog("star/" + logName, "0b\t" + unzipStr, config)
 		unzipStr #> new java.io.File(fqFileName) !;
-		if (config.getMode != "local")
-			new File(input_file).delete()
+
+		if(paired){
+			fqFileName = tmpDir + input_file2.substring(input_file2.lastIndexOf('/') + 1).replace(".gz", "")
+			val unzipStr = "gunzip -c " + input_file2
+		    LogWriter.dbgLog("star/" + logName, "0b\t" + unzipStr, config)
+		    unzipStr #> new java.io.File(fqFileName) !;
+			fqFileName = tmpDir + input_file.substring(input_file.lastIndexOf('/') + 1).replace(".gz", "") + " " + tmpDir + input_file2.substring(input_file2.lastIndexOf('/') + 1).replace(".gz", "")
+		}
+	
+		if (config.getMode != "local"){
+            new File(input_file).delete()
+			if(paired) new File(input_file2).delete()
+		}
 
 		//Collect output log info. STAR log is in stdout
 		val stdErrorSb = new StringBuilder
@@ -340,7 +396,7 @@ object SparkGA1
 
 		val command_str = progName + "--genomeDir "  + FileManager.getStarIndexLocalDire("2", config) + " --runThreadN " + nthreads.toString + 
 			" --readFilesIn " + fqFileName + " --outFileNamePrefix " + outFilePrefix + " --limitIObufferSize " + bufferSize + " --genomeLoad " + genomeLoad
-		LogWriter.dbgLog("star/" + x, "1\tstar pass 2 alignment started, RGID = " + config.getRGID + " -> " + command_str, config)
+		LogWriter.dbgLog("star/" + logName, "1\tstar pass 2 alignment started, RGID = " + config.getRGID + " -> " + command_str, config)
 
 		var cmd_res = command_str.!
 		// Delete useless files
@@ -350,7 +406,7 @@ object SparkGA1
 		new File(outFilePrefix+"Log.progress.out").delete()
 
 		var writerMap = new HashMap[(Integer, Integer), SamRegion]()
-		val samRegionsParser = new SamRegionsParser(x, writerMap, config)
+		val samRegionsParser = new SamRegionsParser(x+".fq", writerMap, config)
 
 		val samLinesArray = FileManager.readWholeFile(outFilePrefix + "Aligned.out.sam", config).split('\n')
 
@@ -358,13 +414,14 @@ object SparkGA1
             samRegionsParser.append(line)
 		}
 
-		new File(fqFileName).delete()
+		for(e <- fqFileName.split(' '))
+		    new File(e).delete()
 		new File(outFilePrefix+"Aligned.out.sam").delete()
 
 		FileManager.makeDirIfRequired(config.getOutputFolder + "samChunks", config)
 		FileManager.makeDirIfRequired(config.getOutputFolder + "starPos", config)
 
-		LogWriter.dbgLog("star/" + x, "2\tUploading SAM Files to the HDFS. reads = " + samRegionsParser.getNumOfReads + ", bad lines = " + samRegionsParser.getBadLines, config)
+		LogWriter.dbgLog("star/" + logName, "2\tUploading SAM Files to the HDFS. reads = " + samRegionsParser.getNumOfReads + ", bad lines = " + samRegionsParser.getBadLines, config)
 		var currentNum = 1
 		var outStr = new StringBuilder
 		var dbgStr = new StringBuilder
@@ -429,7 +486,7 @@ object SparkGA1
 		FileManager.writeWholeFile(config.getOutputFolder + "starPos/pos_" + x + "-" + posCurrentNum, posOutStr.toString, config)
 		dbgStr.append("\n" + (System.currentTimeMillis - t1).toString)
 		//LogWriter.dbgLog("bwa/" + x, t0, "*\tTime taken by each loop iteration for chunk making step = " + dbgStr, config)
-		LogWriter.dbgLog("star/" + x, "3\tSAM files uploaded to the HDFS. # of positions files = " + posCurrentNum + ", # of sam files = " + 
+		LogWriter.dbgLog("star/" + logName, "3\tSAM files uploaded to the HDFS. # of positions files = " + posCurrentNum + ", # of sam files = " + 
 			currentNum + "\n=============================================================================\n" + stdErrorSb.toString + 
 			"\n=============================================================================\n" + stdOutSb.toString, config)
 
@@ -1230,10 +1287,10 @@ object SparkGA1
 		
 		// Delete temporary files
 
-		/* test saiyi
+	
 		new File(tmpOut1).delete()
 		new File(tmpOut2).delete()
-		new File(tmpMetrics).delete()*/
+		new File(tmpMetrics).delete()
 		
 		return cmdRes
 	}
@@ -1284,10 +1341,10 @@ object SparkGA1
 			FileManager.uploadFileToOutput(tmpFile1, "indelOutput", false, config)
 		
 		// Delete temporary files
-		/*test saiyi
+		
 		new File(sInput).delete()
 		new File(sInput.replace(".bam", ".bai")).delete()
-		new File(targets).delete()*/
+		new File(targets).delete()
 		
 		return cmdRes
 	}
@@ -1322,10 +1379,10 @@ object SparkGA1
 				FileManager.uploadFileToOutput(tmpFile2, "baseOutput", false, config)
 		
 			// Delete temporary files
-			/*saiyi test
+			
 			new File(tmpFile1).delete()
 			new File(tmpFile1.replace(".bam", ".bai")).delete()
-			new File(table).delete()*/
+			new File(table).delete()
 		}
 		
 		return cmdRes
@@ -1352,12 +1409,12 @@ object SparkGA1
 		var cmdRes = cmdStr.!
 		
 		// Delete temporary files
-		/* test saiyi
+		
 		new File(tmpFile2).delete()
 		new File(tmpFile2.replace(".bam", ".bai")).delete()
 		new File(tmpFileBase + ".bed").delete()
 		if (!config.doPrintReads)
-			new File(tmpFileBase + ".table").delete*/
+			new File(tmpFileBase + ".table").delete
 		
 		return cmdRes
 	}
@@ -1366,12 +1423,13 @@ object SparkGA1
 		var a = scala.collection.mutable.ArrayBuffer.empty[((Integer, Integer, Integer), String)]
 		var fileName = config.getTmpFolder() + x + "_SJ.out.tab"
 		val hdfsManager = new HDFSManager
+		val logName = x + ".fq.log"
 
 		if (config.getMode() != "local")
 			hdfsManager.download(x + "_SJ.out.tab", config.getOutputFolder + "pass1SJ/", config.getTmpFolder, false)
 
 		if (!Files.exists(Paths.get(fileName))){
-			LogWriter.dbgLog("star/" + x, "SJ download failed, returning an empty array", config)
+			LogWriter.dbgLog("star/" + logName, "SJ download failed, returning an empty array", config)
             return a.toArray
 		}
 			
@@ -1387,23 +1445,12 @@ object SparkGA1
 			a.append(((chrNumber, start, end), line))
 		}
 		// Delete temporary files
-		//comment for test: not delete sj files
-		//new File(fileName).delete()
+		
+		new File(fileName).delete()
 		
 		return a.toArray
 	}
 
-	/*Test*/
-	def lineToSJPair(line:String, config:Configuration):((Integer, Integer, Integer), String) ={
-		
-        val e = line.split('\t')
-		val chr = e(0)
-		val start = e(1).toInt
-		var end = e(2).toInt
-		var chrNumber = config.getChrIndex(chr)
-
-		return ((chrNumber, start, end), line)
-	}
 
 	def getVCF(chrRegion: String, config: Configuration) : Array[((Integer, Integer), String)] =
 	{
@@ -1551,7 +1598,7 @@ object SparkGA1
 		});
 		//////////////////////////////////////////////////////////////////////////
 		if (part == 1)
-		{		
+		{
 			val noTask = config.getNumTasks.toInt
 			var noPartition = noTask
 			var inputData = sc.parallelize(Array("spark", "genome")) //randomly define an RDD of type String
@@ -1571,7 +1618,7 @@ object SparkGA1
             }
 
 			
-
+            //saiyi test haven't changed streaming to paired case
 			if (config.doStreamingBWA)
 			{
 				var done = false
@@ -1598,7 +1645,7 @@ object SparkGA1
 					ei += parTasks
 				}
 
-				val inputArray = FileManager.getInputFileNames(config.getInputFolder, config).filter(x => x.contains(".fq")).map(x => x.replace(".gz", ""))  
+				val inputArray = FileManager.getInputFileNames(config.getInputFolder, config).filter(x => x.contains(".fq")).map(x => x.replace(".gz", "")).distinct
 			    if (inputArray == null)
 			    {
 					println("The input directory does not exist!")
@@ -1623,7 +1670,7 @@ object SparkGA1
 			}
 		    else
 			{
-				val inputArray = FileManager.getInputFileNames(config.getInputFolder, config).filter(x => x.contains(".fq")).map(x => x.replace(".gz", ""))  
+				val inputArray = FileManager.getInputFileNames(config.getInputFolder, config).filter(x => x.contains(".fq")).map(x => x.split('-')(0)).distinct
 				if (inputArray == null)
 				{
 					println("The input directory does not exist!")
@@ -1680,7 +1727,7 @@ object SparkGA1
 						Iterator[Array[((Integer, Integer), (String, Long, Int, Int, String))]]()
 					}
 					else{
-						FileManager.deleteSTARIndex("1",config) //delete 1st genome if in cluster mode
+						FileManager.deleteSTARIndex("1",config) //delete 1st genome only if in cluster mode
                         starGenomeLoad("2", "LoadAndExit", index.toString, config)
 						iter.map(x=>starRun2(x, bcConfig.value))
 						//iter

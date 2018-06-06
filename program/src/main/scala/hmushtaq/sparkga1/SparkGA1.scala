@@ -290,18 +290,17 @@ object SparkGA1
 		val genomeLoad = "LoadAndKeep"
 		// Example: STAR --genomeDir STAR_ref --runThreadN 8 --readFilesIn x.fq --outFileNamePrefix tmpDir/star1out/x_  (e.g. x_SJ.out.tab)
 		val command_str = progName + "--genomeDir "  + FileManager.getStarIndexLocalDire("1", config) + " --runThreadN " + nthreads.toString + 
-			" --readFilesIn " + fqFileName + " --outFileNamePrefix " + outFilePrefix + " --limitIObufferSize " + bufferSize + " --genomeLoad " + genomeLoad
+			" --readFilesIn " + fqFileName + " --outFileNamePrefix " + outFilePrefix + " --limitIObufferSize " + bufferSize + " --genomeLoad " + genomeLoad + " --outSAMtype None"
 		LogWriter.dbgLog("star/" + logName, "1\tstar pass 1 alignment started, RGID = " + config.getRGID + " -> " + command_str, config)
 		
 		var cmd_res = command_str.!
 		// Delete useless files
-		new File(outFilePrefix+"Aligned.out.sam").delete()
+		//new File(outFilePrefix+"Aligned.out.sam").delete() //added  --outSAMtype None only in pass 1 alignment
 		new File(outFilePrefix+"Log.final.out").delete()
 		new File(outFilePrefix+"Log.out").delete()
 		new File(outFilePrefix+"Log.progress.out").delete()
 
 		//saiyi
-		//val starFile = new File("./STAR")
         val isTabExist = Files.exists(Paths.get(outFilePrefix+"SJ.out.tab"))
 		// val isGenomeThere = Files.exists(Paths.get("./STAR_ref/genomeParameters.txt"))
 		// val isBwaExist = Files.exists(Paths.get("bwa"))
@@ -375,48 +374,40 @@ object SparkGA1
             new File(input_file).delete()
 			if(paired) new File(input_file2).delete()
 		}
-
-		//Collect output log info. STAR log is in stdout
-		val stdErrorSb = new StringBuilder
-		val stdOutSb = new StringBuilder
-		val logger = ProcessLogger(
-			(o: String) => {
-				stdOutSb.append(o)
-				},
-			(e: String) => {stdErrorSb.append(e + '\n')}
-		)
 		
 
 		// run STAR align pass 2
 		val progName = FileManager.getToolsDirPath(config) + "STAR "
-		val outFilePrefix = tmpDir + x +"_p2_"   //e.g. 9.fq_p2_Aligned.out.sam
+		val outFilePrefix = tmpDir + x +"_p2_"   //e.g. 9_p2_Aligned.out.sam
 		val nthreads = config.getNumThreads.toInt
 		val bufferSize = "30000000"
 		val genomeLoad = "LoadAndKeep"
 
 		val command_str = progName + "--genomeDir "  + FileManager.getStarIndexLocalDire("2", config) + " --runThreadN " + nthreads.toString + 
-			" --readFilesIn " + fqFileName + " --outFileNamePrefix " + outFilePrefix + " --limitIObufferSize " + bufferSize + " --genomeLoad " + genomeLoad
+			" --readFilesIn " + fqFileName + " --outFileNamePrefix " + outFilePrefix + " --limitIObufferSize " + bufferSize + " --genomeLoad " + genomeLoad + " --outStd SAM"
 		LogWriter.dbgLog("star/" + logName, "1\tstar pass 2 alignment started, RGID = " + config.getRGID + " -> " + command_str, config)
 
-		var cmd_res = command_str.!
+		var writerMap = new HashMap[(Integer, Integer), SamRegion]()
+		val samRegionsParser = new SamRegionsParser(x+".fq", writerMap, config)
+		val stdErrorSb = new StringBuilder
+		val logger = ProcessLogger(
+			(o: String) => {
+				samRegionsParser.append(o)
+				},
+			(e: String) => {stdErrorSb.append(e + '\n')}
+		)
+		command_str ! logger
+
 		// Delete useless files
 		new File(outFilePrefix+"SJ.out.tab").delete()
 		new File(outFilePrefix+"Log.final.out").delete()
 		new File(outFilePrefix+"Log.out").delete()
 		new File(outFilePrefix+"Log.progress.out").delete()
-
-		var writerMap = new HashMap[(Integer, Integer), SamRegion]()
-		val samRegionsParser = new SamRegionsParser(x+".fq", writerMap, config)
-
-		val samLinesArray = FileManager.readWholeFile(outFilePrefix + "Aligned.out.sam", config).split('\n')
-
-		for(line <- samLinesArray){
-            samRegionsParser.append(line)
-		}
-
+		new File(outFilePrefix+"Log.std.out").delete()
 		for(e <- fqFileName.split(' '))
 		    new File(e).delete()
-		new File(outFilePrefix+"Aligned.out.sam").delete()
+		//no sam out file
+		//new File(outFilePrefix+"Aligned.out.sam").delete()
 
 		FileManager.makeDirIfRequired(config.getOutputFolder + "samChunks", config)
 		FileManager.makeDirIfRequired(config.getOutputFolder + "starPos", config)
@@ -488,7 +479,7 @@ object SparkGA1
 		//LogWriter.dbgLog("bwa/" + x, t0, "*\tTime taken by each loop iteration for chunk making step = " + dbgStr, config)
 		LogWriter.dbgLog("star/" + logName, "3\tSAM files uploaded to the HDFS. # of positions files = " + posCurrentNum + ", # of sam files = " + 
 			currentNum + "\n=============================================================================\n" + stdErrorSb.toString + 
-			"\n=============================================================================\n" + stdOutSb.toString, config)
+			"\n=============================================================================\n", config)
 
 		return res.toArray
 
@@ -1497,8 +1488,6 @@ object SparkGA1
             var sjFile = ""
 			val hdfsManager = new HDFSManager
 			
-
-
 			if (config.getMode != "local"){
 			    hdfsManager.createIfRequired(config.getOutputFolder + "log/star/" + logName)
 				hdfsManager.download("mergedPass1_SJ.out.tab", config.getOutputFolder, config.getTmpFolder, false)
@@ -1602,6 +1591,7 @@ object SparkGA1
 			val noTask = config.getNumTasks.toInt
 			var noPartition = noTask
 			var inputData = sc.parallelize(Array("spark", "genome")) //randomly define an RDD of type String
+			val paired = config.getPaired()
 
             if(config.getMode!="local"){
 					val noInstance = config.getNumInstance.toInt
@@ -1670,7 +1660,13 @@ object SparkGA1
 			}
 		    else
 			{
-				val inputArray = FileManager.getInputFileNames(config.getInputFolder, config).filter(x => x.contains(".fq")).map(x => x.split('-')(0)).distinct
+				var inputArray = Array[String]()
+				if(paired){
+                    inputArray = FileManager.getInputFileNames(config.getInputFolder, config).filter(x => x.contains(".fq")).map(x => x.split('-')(0)).distinct
+				}
+				else{
+					inputArray = FileManager.getInputFileNames(config.getInputFolder, config).filter(x => x.contains(".fq")).map(x => x.split('.')(0)).distinct
+				}
 				if (inputArray == null)
 				{
 					println("The input directory does not exist!")
@@ -1680,6 +1676,8 @@ object SparkGA1
 				inputArray.foreach(println)
 				inputData = sc.parallelize(inputArray, noPartition) //
 				
+				//benchmark saiyi
+				val t011 = System.currentTimeMillis
 
 				val testStarOutput = inputData.mapPartitionsWithIndex{ (index, iter) =>
 				    if(iter.isEmpty){
@@ -1692,6 +1690,10 @@ object SparkGA1
 					}
 				}
 				testStarOutput.collect
+
+                //benchmark saiyi
+				var et = (System.currentTimeMillis - t011) / 1000
+				LogWriter.statusLog("Alignment 1 : ", "Elapsed time: "+et.toString + " secs", config)
                 
 				//may optimize with smaller inputData and use map
 				val testAlign1Remove = inputData.mapPartitionsWithIndex{ (index, iter) =>
@@ -1706,6 +1708,8 @@ object SparkGA1
 				}
 				testAlign1Remove.collect 
 			}//end of no streaming
+                //benchmark saiyi
+			    val t012 = System.currentTimeMillis
 
                 val pass1SJArray = inputData.flatMap(x => getPass1SJ(x,config)).reduceByKey((a, b)=>a).sortByKey().map(_._2 + '\n').collect
 
@@ -1719,8 +1723,22 @@ object SparkGA1
 					writer.write(e)
 				writer.close
 
+				//benchmark saiyi
+				var et2 = (System.currentTimeMillis - t012) / 1000
+				LogWriter.statusLog("Merge SJ : ", "Elapsed time: "+et2.toString + " secs", config)
+
+				//benchmark saiyi
+			    val t013 = System.currentTimeMillis
+
 				val singleTask = sc.parallelize(1 to 1,1)
 				val regeneration = singleTask.map(x=>regenerateGenome(x,config)).collect 
+
+				//benchmark saiyi
+				var et3 = (System.currentTimeMillis - t013) / 1000
+				LogWriter.statusLog("re generate : ", "Elapsed time: "+et3.toString + " secs", config)
+
+				//benchmark saiyi
+			    val t014 = System.currentTimeMillis
 
 				val testStarAlign2 = inputData.mapPartitionsWithIndex{ (index, iter) =>
 				    if(iter.isEmpty){
@@ -1734,6 +1752,10 @@ object SparkGA1
 					}
 				}
 				val starOutput = testStarAlign2.flatMap(x=>x).collect
+
+				//benchmark saiyi
+				var et4 = (System.currentTimeMillis - t014) / 1000
+				LogWriter.statusLog("Alignment 2 : ", "Elapsed time: "+et4.toString + " secs", config)
 				
                 
 				//may optimize with smaller inputData and use map
@@ -1761,6 +1783,9 @@ object SparkGA1
 				}
 				testDelete.collect
 
+                //benchmark saiyi
+				val t015 = System.currentTimeMillis
+
                 var starOutStr = new StringBuilder
 				for(e <- starOutput)
 				{
@@ -1777,6 +1802,10 @@ object SparkGA1
 				    
                 FileManager.makeDirIfRequired(config.getOutputFolder + "starOut", config)
 			    FileManager.writeWholeFile(config.getOutputFolder + "starOut.txt", starOutStr.toString, config)
+
+				//benchmark saiyi
+				var et5 = (System.currentTimeMillis - t015) / 1000
+				LogWriter.statusLog("Sam chunks: ", "Elapsed time: "+et5.toString + " secs", config)
 				
 
 			

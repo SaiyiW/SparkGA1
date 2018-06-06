@@ -88,10 +88,10 @@ public class Configuration implements Serializable
 			Document document = documentBuilder.parse(file);
 
 			String pairedString = document.getElementsByTagName("paired-input").item(0).getTextContent();
-			if((pairedString!="true")||(pairedString!="false"))
-			    throw new IllegalArgumentException("Unrecognized paired-input option: it must be either \"true\" or \"false\".");
+			if((!pairedString.equals("true"))&&(!pairedString.equals("false")))
+			    throw new IllegalArgumentException("Unrecognized paired-input option: "+pairedString+". It must be either \"true\" or \"false\".");
 			
-			paired = (pairedString == "true");
+			paired = (pairedString.equals("true"));
 			mode = document.getElementsByTagName("mode").item(0).getTextContent();
 			refPath = document.getElementsByTagName("refPath").item(0).getTextContent();
 			snpPath = document.getElementsByTagName("snpPath").item(0).getTextContent();

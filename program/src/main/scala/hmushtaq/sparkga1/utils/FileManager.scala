@@ -25,6 +25,7 @@ import java.nio.channels.FileLock
 import java.text.DateFormat
 import java.text.SimpleDateFormat
 import java.util.Calendar
+import java.util.zip.GZIPInputStream;
 
 import org.apache.commons.io.FileUtils
 
@@ -35,6 +36,19 @@ import org.apache.commons.io.FileUtils
  */
 object FileManager
 {
+	def unzipGZ(gzFilePath: String , destFilePath: String) {
+        val gzipInputStream = new GZIPInputStream(new FileInputStream(gzFilePath));
+        val out = new FileOutputStream(destFilePath);
+        val buf = new Array[Byte](64*1024); //64 kB
+        var len = gzipInputStream.read(buf)
+        while (len > 0){
+            out.write(buf, 0, len);
+            len = gzipInputStream.read(buf)
+        }
+        gzipInputStream.close();
+        out.close();
+    }
+
 	def getFileLock(fChannel: FileChannel, logName:String, x:String, config:Configuration):FileLock = {
         var lock = fChannel.tryLock()
         var i = 0

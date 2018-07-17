@@ -39,6 +39,7 @@ public class DictParser
 	long chrLenSum;
 	private HashMap<String, Integer> chrNameMap;
 	private HashSet<String> ignoreListSet;
+	//private double testVal = 0.1;
 	
 	public DictParser(HashSet<String> ilSet)
 	{
@@ -79,17 +80,18 @@ public class DictParser
 	
 	void setChrRegionsSizes(int regions)
 	{
+		
 		chrRegionSizeArray = new int[chrLenArray.size()];
 		int avgRegionSize = (int)(chrLenSum / regions);
 		
 		for(int i = 0; i < chrLenArray.size(); i++)
 		{
-			int segments = chrLenArray.get(i) / avgRegionSize;
+			int segments = (int)(chrLenArray.get(i) / avgRegionSize);
 		
 			if (segments == 0)
 				segments = 1;
 		
-			chrRegionSizeArray[i] = chrLenArray.get(i) / segments;
+			chrRegionSizeArray[i] = (int)(chrLenArray.get(i) / segments);
 			System.out.println("Hamid: chr" + i + " avgRegionSize = " + avgRegionSize + ", chrLen = " + chrLenArray.get(i));
 			System.out.println("Hamid: chr" + i + " -> segments = " + segments + ", region size = " + chrRegionSizeArray[i]);
 		}
@@ -128,11 +130,11 @@ public class DictParser
 				int seqLength = 0;
 				try 
 				{
-					seqLength = Integer.parseInt(lineData[2].substring(lineData[2].indexOf(':') + 1));
+					seqLength = (int)(Integer.parseInt(lineData[2].substring(lineData[2].indexOf(':') + 1)));
 					if (!ignoreListSet.contains(seqName))
 					{
 						chrLenSum += seqLength;
-						chrLenArray.add(seqLength);
+						chrLenArray.add((int)(seqLength));
 					}
 				} 
 				catch(NumberFormatException ex) 

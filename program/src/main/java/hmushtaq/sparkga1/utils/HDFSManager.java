@@ -70,11 +70,14 @@ public class HDFSManager
 		{
 			Path filenamePath = new Path(fname);  
 		
-			if (fs.exists(filenamePath))
+			if (fs.exists(filenamePath)){
 				return;
-				
-			FSDataOutputStream fout = fs.create(filenamePath);
-			fout.close();
+			}
+			else{
+                FSDataOutputStream fout = fs.create(filenamePath);
+			    fout.close();
+			}
+			
 		}
 		catch (IOException ex) 
 		{

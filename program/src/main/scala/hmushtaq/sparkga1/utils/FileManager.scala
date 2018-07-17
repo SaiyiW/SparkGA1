@@ -290,7 +290,7 @@ object FileManager
 		val localIndexFolder = config.getStarLocalFolder()+"STAR_index"+passNo+"/" //local path
 
 		if(passNo=="2"){
-			indexFolderHDFS = config.getStarRefFolder() + "STAR_index"+passNo+"/"   //hdfs path of new index
+			indexFolderHDFS = config.getOutputFolder() + "STAR_index"+passNo+"/"   //hdfs path of new index
 		}
 
 		if (!(new File(localIndexFolder).exists)) {
@@ -305,6 +305,10 @@ object FileManager
 		hdfsManager.downloadIfRequired("genomeParameters.txt", indexFolderHDFS, localIndexFolder)
         hdfsManager.downloadIfRequired("SA",                   indexFolderHDFS, localIndexFolder)
 		hdfsManager.downloadIfRequired("SAindex",              indexFolderHDFS, localIndexFolder)
+		if(passNo == "2"){
+			hdfsManager.downloadIfRequired("sjdbInfo.txt",     indexFolderHDFS, localIndexFolder)
+			hdfsManager.downloadIfRequired("sjdbList.out.tab", indexFolderHDFS, localIndexFolder)
+		}
 
 		return localIndexFolder
 
